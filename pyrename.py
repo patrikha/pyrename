@@ -1,5 +1,7 @@
+import argparse
 import os
 import re
+import sys
 from rope.base.project import Project
 from rope.refactor.rename import Rename
 
@@ -91,13 +93,30 @@ class rename:
         return methods
 
 
-def main():
-    root = os.path.join(os.path.abspath('.'), 'test')
+def dry_run(root, module=None):
+    """ list all methods to be renamed without updating any files """
     project = Project(root)
     r = rename()
     r.load_words()
     r.words.remove('testa')
     for file_resource in project.get_files():
+        if module and not module in file_resource.real_path:
+            continue
+        methods = r.index_file(file_resource.read())
+        print('%s' % file_resource.path)
+        for method in methods:
+            print('    %s:%d->%s' % (method[0], method[1], method[2]))
+
+
+def refactor(root, module=None):
+    """ renames all methods to PEP8 standard """
+    project = Project(root)
+    r = rename()
+    r.load_words()
+    r.words.remove('testa')
+    for file_resource in project.get_files():
+        if module and not module in file_resource.real_path:
+            continue
         while True:
             project.validate()
             methods = r.index_file(file_resource.read())
@@ -111,5 +130,34 @@ def main():
             changes = Rename(project, file_resource, pos).get_changes(new_name)
             project.do(changes)
 
+
+def validate_path(path):
+    if not os.path.isabs(path):
+        path = os.path.abspath(path)
+    if not os.path.exists(path):
+        print('Invalid path: %s' % path)
+        return False
+    return True
+
+
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Refactor all method names to follow the PEP8 standard.')
+    parser.add_argument('path', metavar='PROJECT_PATH', type=str, nargs=1, help='path to project folder.')
+    parser.add_argument('-m', '--module', metavar='MODULE_PATH', type=str, nargs='?', help='path to module folder, (sub path to project scope).')
+    parser.add_argument('-n', '--dry-run', dest='dryrun', metavar='', type=bool, nargs='?', default=False, const=True, help='don not refactor any files, just list work order.')
+
+    args = parser.parse_args()
+    projectpath = args.path[0]
+    modulepath = args.module
+    if not validate_path(projectpath):
+        sys.exit(1)
+    if modulepath and not validate_path(modulepath):
+        sys.exit(2)
+    if modulepath and projectpath not in modulepath:
+        print('Module: %s not in project: %s' % (modulepath, projectpath))
+        sys.exit(3)
+
+    if args.dryrun:
+        dry_run(projectpath, modulepath)
+    else:
+        refactor(projectpath, modulepath)
