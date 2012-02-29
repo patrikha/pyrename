@@ -1,6 +1,7 @@
 from pyrename import rename
 import unittest
 
+
 class test_pyrename(unittest.TestCase):
 
     def test_find_words(self):
