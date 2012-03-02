@@ -1,0 +1,15 @@
+usage: pyrename.py [-h] [-m [MODULE_PATH]] [-n ] [-d [DICTIONARY]]
+                   PROJECT_PATH
+
+Refactor all method names to follow the PEP8 standard.
+
+positional arguments:
+  PROJECT_PATH          path to project folder.
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -m [MODULE_PATH], --module [MODULE_PATH]
+                        path to module folder, (sub path to project scope).
+  -n [], --dry-run []   don not refactor any files, just list work order.
+  -d [DICTIONARY], --dict [DICTIONARY]
+                        path to additional dictionary for un/recognized words.

@@ -2,13 +2,18 @@ import argparse
 import os
 import re
 import sys
+from lxml import etree
 from rope.base.project import Project
 from rope.refactor.rename import Rename
 
 
 class rename:
 
-    def __init__(self):
+    def __init__(self, project_path=None, module_path=None):
+        """ initialize using project path and optional sub module path to limit rename scope """
+        if project_path:
+            self.project = Project(project_path)
+        self.module_path = module_path
         self.words = set()
         self.files = []
         self.namemap = {}
@@ -20,6 +25,15 @@ class rename:
         with open('words') as f:
             for line in f:
                 self.words.add(line.strip().lower())
+
+    def load_dict(self, dictionary_path):
+        """ load a custom dict with new (recognized) and restricted (unrecognized) words """
+        doc = etree.parse(dictionary_path)
+        for recognized in doc.xpath('/dictionary/recognized/word'):
+            self.words.add(recognized.text)
+        for unrecognized in doc.xpath('/dictionary/unrecognized/word'):
+            if unrecognized.text in self.words:
+                self.words.remove(unrecognized.text)
 
     def wash_word(self, string):
         """ clean up word by separating prefix, suffix and word without underscores """
@@ -38,18 +52,33 @@ class rename:
             i += 1
         return word
 
-    def find_words(self, string, index=0):
+    def reverse_find_word(self, string, index):
+        """ backwards find the longest word from index """
+        word = ''
+        i = index - 1
+        while i >= 0:
+            if string[i:index] in self.words:
+                word = string[i:index]
+            i -= 1
+        return word
+
+    def find_words(self, string, index=-1):
         """ find all known words in a string """
         words = []
-        if index == len(string):
+        if index == -1:
+            index = len(string)
+        if index == 0:
             return words
-        word = self.find_word(string, index)
+        word = self.reverse_find_word(string, index)
         if word:
-            words.append(word)
-            index += len(word)
+            words.insert(0, word)
+            index -= len(word)
         else:
-            index += 1
-        words.extend(self.find_words(string, index))
+            index -= 1
+        w = self.find_words(string, index)
+        w.extend(words)
+        words = w
+        #words.extend(self.find_words(string, index))
         return words
 
     def rename(self, string):
@@ -92,46 +121,40 @@ class rename:
                 running = False
         return methods
 
+    def get_files(self):
+        """ iterator for all valid project files """
+        for file_resource in self.project.get_files():
+            if self.module_path and not self.module_path in file_resource.real_path:
+                continue
+            yield file_resource
 
-def dry_run(root, module=None):
-    """ list all methods to be renamed without updating any files """
-    project = Project(root)
-    r = rename()
-    r.load_words()
-    r.words.remove('testa')
-    for file_resource in project.get_files():
-        if module and not module in file_resource.real_path:
-            continue
-        methods = r.index_file(file_resource.read())
-        print('%s' % file_resource.path)
-        for method in methods:
-            print('    %s:%d->%s' % (method[0], method[1], method[2]))
+    def dry_run(self):
+        """ list all methods to be renamed without updating any files """
+        for file_resource in self.get_files():
+            methods = self.index_file(file_resource.read())
+            print('%s' % file_resource.path)
+            for method in methods:
+                print('    %s:%d->%s' % (method[0], method[1], method[2]))
 
-
-def refactor(root, module=None):
-    """ renames all methods to PEP8 standard """
-    project = Project(root)
-    r = rename()
-    r.load_words()
-    r.words.remove('testa')
-    for file_resource in project.get_files():
-        if module and not module in file_resource.real_path:
-            continue
-        while True:
-            project.validate()
-            methods = r.index_file(file_resource.read())
-            if len(methods) == 0:
-                break
-            method = methods[0]
-            old_name = method[0]
-            pos = method[1]
-            new_name = method[2]
-            print('rename: %s:%d->%s' % (old_name, pos, new_name))
-            changes = Rename(project, file_resource, pos).get_changes(new_name)
-            project.do(changes)
+    def refactor(self):
+        """ renames all methods to PEP8 standard """
+        for file_resource in self.get_files():
+            while True:
+                self.project.validate()
+                methods = self.index_file(file_resource.read())
+                if len(methods) == 0:
+                    break
+                method = methods[0]
+                old_name = method[0]
+                pos = method[1]
+                new_name = method[2]
+                print('rename: %s:%d->%s' % (old_name, pos, new_name))
+                changes = Rename(self.project, file_resource, pos).get_changes(new_name)
+                self.project.do(changes)
 
 
 def validate_path(path):
+    """ validate that given path exist """
     if not os.path.isabs(path):
         path = os.path.abspath(path)
     if not os.path.exists(path):
@@ -145,10 +168,12 @@ if __name__ == '__main__':
     parser.add_argument('path', metavar='PROJECT_PATH', type=str, nargs=1, help='path to project folder.')
     parser.add_argument('-m', '--module', metavar='MODULE_PATH', type=str, nargs='?', help='path to module folder, (sub path to project scope).')
     parser.add_argument('-n', '--dry-run', dest='dryrun', metavar='', type=bool, nargs='?', default=False, const=True, help='don not refactor any files, just list work order.')
+    parser.add_argument('-d', '--dict', metavar='DICTIONARY', type=str, nargs='?', help='path to additional dictionary for un/recognized words.')
 
     args = parser.parse_args()
     projectpath = args.path[0]
     modulepath = args.module
+    dictpath = args.dict
     if not validate_path(projectpath):
         sys.exit(1)
     if modulepath and not validate_path(modulepath):
@@ -156,8 +181,13 @@ if __name__ == '__main__':
     if modulepath and projectpath not in modulepath:
         print('Module: %s not in project: %s' % (modulepath, projectpath))
         sys.exit(3)
+    if dictpath and not validate_path(dictpath):
+        print('Missing dictionary: %s' % dictpath)
 
+    renamer = rename(projectpath, modulepath)
+    renamer.load_words()
+    renamer.load_dict(dictpath)
     if args.dryrun:
-        dry_run(projectpath, modulepath)
+        renamer.dry_run()
     else:
-        refactor(projectpath, modulepath)
+        renamer.refactor()
